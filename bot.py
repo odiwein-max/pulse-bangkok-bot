@@ -104,7 +104,6 @@ cur.execute(
     """
 )
 
-# migrations
 cur.execute("PRAGMA table_info(checkins)")
 cols = [c[1] for c in cur.fetchall()]
 if "source" not in cols:
@@ -227,6 +226,20 @@ def set_setting(key: str, value: str) -> None:
 
 def autopilot_enabled() -> bool:
     return get_setting("autopilot_enabled", "on") == "on"
+
+
+def private_checkin_button(bot_username: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Check in 📍", url=f"https://t.me/{bot_username}")]]
+    )
+
+
+async def send_private_checkin_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bot_username = context.bot.username
+    await update.message.reply_text(
+        "Want to appear in the next Pulse update?\n\nCheck in with the bot here 👇",
+        reply_markup=private_checkin_button(bot_username),
+    )
 
 
 # ================= AUTOPILOT =================
@@ -392,7 +405,7 @@ def create_auto_checkins() -> int:
     return created
 
 
-# ================= SUMMARY STYLE HELPERS =================
+# ================= SUMMARY STYLE =================
 def vibe_emoji(vibe: str) -> str:
     return {
         "Work": "💻",
@@ -415,27 +428,83 @@ def vibe_label(vibe: str) -> str:
 
 def area_status(total: int) -> str:
     if total == 0:
-        return "quiet 👀"
+        return "quiet"
     if total <= 2:
-        return "starting up"
+        return "starting"
     if total <= 5:
         return "active"
-    return "🔥 hot"
+    return "hot"
 
 
-# ================= UX HELPERS =================
-def private_checkin_button(bot_username: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Check in 📍", url=f"https://t.me/{bot_username}")]]
-    )
+def format_summary_text() -> str:
+    cleanup()
+    rows = cur.execute(
+        "SELECT area, vibe, COUNT(*) as count FROM checkins GROUP BY area, vibe ORDER BY area, vibe"
+    ).fetchall()
 
+    total_row = cur.execute("SELECT COUNT(*) as total FROM checkins").fetchone()
+    total_count = total_row["total"] if total_row else 0
 
-async def send_private_checkin_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bot_username = context.bot.username
-    await update.message.reply_text(
-        "Please continue check-in in the private chat with the bot 👇",
-        reply_markup=private_checkin_button(bot_username),
-    )
+    if not rows:
+        return (
+            "👀 Pulse Bangkok — Live Now\n\n"
+            "The city feels quiet right now.\n\n"
+            "Want to appear in the next update?\n"
+            "👇 Tap below to check in"
+        )
+
+    grouped = {}
+    for row in rows:
+        area = row["area"]
+        vibe = row["vibe"]
+        count = row["count"]
+        grouped.setdefault(area, [])
+        grouped[area].append((vibe, count))
+
+    active_areas = len(grouped)
+
+    intro_options = [
+        f"👀 {total_count} people live right now across {active_areas} Bangkok areas",
+        f"🔥 Bangkok is moving right now — {total_count} people currently checked in",
+        f"📍 Live Pulse update — {total_count} people active right now",
+    ]
+    intro = random.choice(intro_options)
+
+    lines = ["🔥 Pulse Bangkok — Live Now", "", intro, ""]
+
+    for area, vibes in grouped.items():
+        area_total = sum(count for _, count in vibes)
+        status = area_status(area_total)
+
+        if status == "hot":
+            header = f"{area} is 🔥 hot right now"
+        elif status == "active":
+            header = f"{area} is active"
+        elif status == "starting":
+            header = f"{area} is starting up"
+        else:
+            header = f"{area} is quiet for now 👀"
+
+        lines.append(header + ":")
+
+        vibes_sorted = sorted(vibes, key=lambda x: x[1], reverse=True)
+        for vibe, count in vibes_sorted:
+            emoji = vibe_emoji(vibe)
+            label = vibe_label(vibe)
+            lines.append(f"• {count} {label} {emoji}")
+
+        lines.append("")
+
+    if active_areas >= 4:
+        lines.append("Bangkok feels pretty alive right now.")
+    elif active_areas >= 2:
+        lines.append("A few areas are starting to pick up.")
+    else:
+        lines.append("Most of the action is still concentrated in one zone.")
+
+    lines.append("")
+    lines.append("👇 Tap below to check in")
+    return "\n".join(lines)
 
 
 # ================= USER FLOW =================
@@ -590,6 +659,34 @@ async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("DELETE FROM checkins WHERE user_id = ?", (user_id,))
     conn.commit()
     await update.message.reply_text("Check-in ended.", reply_markup=main_menu())
+
+
+# ================= GROUP ONBOARDING =================
+async def welcome_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type not in ("group", "supergroup"):
+        return
+
+    if not update.message or not update.message.new_chat_members:
+        return
+
+    bot_id = context.bot.id
+    new_members = update.message.new_chat_members
+    human_members = [m for m in new_members if not m.is_bot and m.id != bot_id]
+
+    if not human_members:
+        return
+
+    bot_username = context.bot.username
+    text = (
+        "Welcome to Pulse Bangkok 👋\n\n"
+        "This group shows what’s happening around the city in real time.\n"
+        "To appear in the next live update, check in with the bot 👇"
+    )
+
+    await update.message.reply_text(
+        text,
+        reply_markup=private_checkin_button(bot_username),
+    )
 
 
 # ================= ADMIN =================
@@ -790,88 +887,6 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ================= SUMMARY =================
-def format_summary_text() -> str:
-    cleanup()
-    rows = cur.execute(
-        "SELECT area, vibe, COUNT(*) as count FROM checkins GROUP BY area, vibe ORDER BY area, vibe"
-    ).fetchall()
-
-    total_row = cur.execute("SELECT COUNT(*) as total FROM checkins").fetchone()
-    total_count = total_row["total"] if total_row else 0
-
-    if not rows:
-        return (
-            "👀 Pulse Bangkok — Live Now\n\n"
-            "The city feels quiet right now.\n\n"
-            "Want to show up in the next update?\n"
-            "👇 Tap below to check in"
-        )
-
-    grouped = {}
-    for row in rows:
-        area = row["area"]
-        vibe = row["vibe"]
-        count = row["count"]
-        grouped.setdefault(area, [])
-        grouped[area].append((vibe, count))
-
-    active_areas = len(grouped)
-
-    intro_options = [
-        f"👀 {total_count} people live right now across {active_areas} Bangkok areas",
-        f"🔥 Bangkok is moving right now — {total_count} people currently checked in",
-        f"📍 Live Pulse update — {total_count} people active right now",
-    ]
-    intro = random.choice(intro_options)
-
-    lines = ["🔥 Pulse Bangkok — Live Now", "", intro, ""]
-
-    for area, vibes in grouped.items():
-        area_total = sum(count for _, count in vibes)
-        status = area_status(area_total)
-
-        area_header_map = {
-            "hot": f"{area} is 🔥 hot right now",
-            "active": f"{area} is active",
-            "starting up": f"{area} is starting up",
-            "quiet 👀": f"{area} is quiet for now 👀",
-        }
-
-        header = area_header_map.get(status, f"{area} is active")
-        if status not in area_header_map:
-            header = f"{area} is {status}"
-
-        if status == "🔥 hot":
-            header = f"{area} is 🔥 hot right now"
-        elif status == "active":
-            header = f"{area} is active"
-        elif status == "starting up":
-            header = f"{area} is starting up"
-        else:
-            header = f"{area} is quiet for now 👀"
-
-        lines.append(header + ":")
-
-        vibes_sorted = sorted(vibes, key=lambda x: x[1], reverse=True)
-        for vibe, count in vibes_sorted:
-            emoji = vibe_emoji(vibe)
-            label = vibe_label(vibe)
-            lines.append(f"• {count} {label} {emoji}")
-
-        lines.append("")
-
-    if active_areas >= 4:
-        lines.append("Bangkok feels pretty alive right now.")
-    elif active_areas >= 2:
-        lines.append("A few areas are starting to pick up.")
-    else:
-        lines.append("Most of the action is still concentrated in one zone.")
-
-    lines.append("")
-    lines.append("👇 Tap below to check in")
-    return "\n".join(lines)
-
-
 async def summary_job(context: ContextTypes.DEFAULT_TYPE):
     if not CHANNEL_ID:
         return
@@ -918,6 +933,7 @@ def main():
     app.add_handler(CommandHandler("admin_run_autopilot", admin_run_autopilot))
     app.add_handler(CommandHandler("get_chat_id", get_chat_id))
 
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_members))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^Safety rules$"), safety))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^My status$"), status))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^End check-in$"), end))
