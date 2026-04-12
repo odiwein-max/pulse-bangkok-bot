@@ -452,8 +452,12 @@ async def admin_clear_ignite(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not is_admin(update.effective_user.id):
         return
 
-    cur.execute("DELETE FROM checkins WHERE user_id >= 900000000")
+    cur.execute("""
+        DELETE FROM checkins
+        WHERE user_id NOT IN (SELECT id FROM users)
+    """)
     conn.commit()
+
     await update.message.reply_text("Ignited activity cleared.")
 
 
