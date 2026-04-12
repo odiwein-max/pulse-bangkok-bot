@@ -392,6 +392,37 @@ def create_auto_checkins() -> int:
     return created
 
 
+# ================= SUMMARY STYLE HELPERS =================
+def vibe_emoji(vibe: str) -> str:
+    return {
+        "Work": "💻",
+        "Social": "🧑‍🤝‍🧑",
+        "Chill": "☕",
+        "Explore": "🗺️",
+        "Drinks": "🍻",
+    }.get(vibe, "•")
+
+
+def vibe_label(vibe: str) -> str:
+    return {
+        "Work": "working",
+        "Social": "social",
+        "Chill": "chilling",
+        "Explore": "exploring",
+        "Drinks": "out for drinks",
+    }.get(vibe, vibe.lower())
+
+
+def area_status(total: int) -> str:
+    if total == 0:
+        return "quiet 👀"
+    if total <= 2:
+        return "starting up"
+    if total <= 5:
+        return "active"
+    return "🔥 hot"
+
+
 # ================= UX HELPERS =================
 def private_checkin_button(bot_username: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -765,12 +796,15 @@ def format_summary_text() -> str:
         "SELECT area, vibe, COUNT(*) as count FROM checkins GROUP BY area, vibe ORDER BY area, vibe"
     ).fetchall()
 
+    total_row = cur.execute("SELECT COUNT(*) as total FROM checkins").fetchone()
+    total_count = total_row["total"] if total_row else 0
+
     if not rows:
         return (
             "👀 Pulse Bangkok — Live Now\n\n"
-            "Not much activity yet in the pilot areas.\n\n"
+            "The city feels quiet right now.\n\n"
             "Want to show up in the next update?\n"
-            "Tap below to check in."
+            "👇 Tap below to check in"
         )
 
     grouped = {}
@@ -781,21 +815,59 @@ def format_summary_text() -> str:
         grouped.setdefault(area, [])
         grouped[area].append((vibe, count))
 
-    vibe_map = {
-        "Work": "working",
-        "Social": "social",
-        "Chill": "chilling",
-        "Explore": "exploring",
-        "Drinks": "drinks",
-    }
+    active_areas = len(grouped)
 
-    lines = ["🔥 Pulse Bangkok — Live Now", ""]
-    for area in grouped:
-        lines.append(area)
-        for vibe, count in grouped[area]:
-            lines.append(f"• {count} {vibe_map.get(vibe, vibe.lower())}")
+    intro_options = [
+        f"👀 {total_count} people live right now across {active_areas} Bangkok areas",
+        f"🔥 Bangkok is moving right now — {total_count} people currently checked in",
+        f"📍 Live Pulse update — {total_count} people active right now",
+    ]
+    intro = random.choice(intro_options)
+
+    lines = ["🔥 Pulse Bangkok — Live Now", "", intro, ""]
+
+    for area, vibes in grouped.items():
+        area_total = sum(count for _, count in vibes)
+        status = area_status(area_total)
+
+        area_header_map = {
+            "hot": f"{area} is 🔥 hot right now",
+            "active": f"{area} is active",
+            "starting up": f"{area} is starting up",
+            "quiet 👀": f"{area} is quiet for now 👀",
+        }
+
+        header = area_header_map.get(status, f"{area} is active")
+        if status not in area_header_map:
+            header = f"{area} is {status}"
+
+        if status == "🔥 hot":
+            header = f"{area} is 🔥 hot right now"
+        elif status == "active":
+            header = f"{area} is active"
+        elif status == "starting up":
+            header = f"{area} is starting up"
+        else:
+            header = f"{area} is quiet for now 👀"
+
+        lines.append(header + ":")
+
+        vibes_sorted = sorted(vibes, key=lambda x: x[1], reverse=True)
+        for vibe, count in vibes_sorted:
+            emoji = vibe_emoji(vibe)
+            label = vibe_label(vibe)
+            lines.append(f"• {count} {label} {emoji}")
+
         lines.append("")
 
+    if active_areas >= 4:
+        lines.append("Bangkok feels pretty alive right now.")
+    elif active_areas >= 2:
+        lines.append("A few areas are starting to pick up.")
+    else:
+        lines.append("Most of the action is still concentrated in one zone.")
+
+    lines.append("")
     lines.append("👇 Tap below to check in")
     return "\n".join(lines)
 
