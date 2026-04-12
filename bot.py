@@ -3,7 +3,14 @@ import math
 import random
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -40,8 +47,16 @@ VIBES = ["Work", "Social", "Chill", "Explore", "Drinks"]
 DURATIONS = ["30 min", "1 hour", "2 hours", "Tonight"]
 
 BLACKLIST_NAMES = {
-    "admin", "support", "bot", "anonymous", "unknown",
-    "test", "null", "none", "system", "moderator"
+    "admin",
+    "support",
+    "bot",
+    "anonymous",
+    "unknown",
+    "test",
+    "null",
+    "none",
+    "system",
+    "moderator",
 }
 
 AREA_GEOFENCE = {
@@ -56,31 +71,38 @@ AREA_GEOFENCE = {
 
 # ================= DATABASE =================
 conn = sqlite3.connect("db.sqlite3", check_same_thread=False)
+conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY,
-    name TEXT
+cur.execute(
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        name TEXT
+    )
+    """
 )
-""")
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS checkins (
-    user_id INTEGER,
-    area TEXT,
-    vibe TEXT,
-    expires_at TEXT,
-    source TEXT DEFAULT 'user'
+cur.execute(
+    """
+    CREATE TABLE IF NOT EXISTS checkins (
+        user_id INTEGER,
+        area TEXT,
+        vibe TEXT,
+        expires_at TEXT,
+        source TEXT DEFAULT 'user'
+    )
+    """
 )
-""")
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
+cur.execute(
+    """
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    """
 )
-""")
 
 # migrations
 cur.execute("PRAGMA table_info(checkins)")
@@ -92,10 +114,11 @@ cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('autopilot_enab
 conn.commit()
 
 # ================= HELPERS =================
-def now():
+def now() -> datetime:
     return datetime.now(BANGKOK_TZ)
 
-def compute_expiry(start, label):
+
+def compute_expiry(start: datetime, label: str) -> datetime:
     if label == "30 min":
         return start + timedelta(minutes=30)
     if label == "1 hour":
@@ -109,23 +132,27 @@ def compute_expiry(start, label):
         return tonight
     return start + timedelta(hours=1)
 
-def is_admin(user_id):
+
+def is_admin(user_id: int) -> bool:
     return str(user_id) in ADMIN_IDS
 
-def cleanup():
+
+def cleanup() -> None:
     cur.execute("DELETE FROM checkins WHERE expires_at <= ?", (now().isoformat(),))
     conn.commit()
 
-def main_menu():
+
+def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             ["Check in", "My status"],
-            ["End check-in", "Safety rules"]
+            ["End check-in", "Safety rules"],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
 
-def area_menu():
+
+def area_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("📍 Use my location", request_location=True)],
@@ -138,19 +165,14 @@ def area_menu():
         one_time_keyboard=True,
     )
 
-def vibe_menu():
-    return ReplyKeyboardMarkup(
-        [[v] for v in VIBES],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
 
-def duration_menu():
-    return ReplyKeyboardMarkup(
-        [[d] for d in DURATIONS],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
+def vibe_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([[v] for v in VIBES], resize_keyboard=True, one_time_keyboard=True)
+
+
+def duration_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([[d] for d in DURATIONS], resize_keyboard=True, one_time_keyboard=True)
+
 
 def validate_name(name: str) -> bool:
     name = (name or "").strip()
@@ -162,7 +184,8 @@ def validate_name(name: str) -> bool:
         return False
     return True
 
-def haversine_km(lat1, lon1, lat2, lon2):
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -175,7 +198,8 @@ def haversine_km(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return r * c
 
-def suggest_area_from_location(lat, lon):
+
+def suggest_area_from_location(lat: float, lon: float):
     matches = []
     for area, cfg in AREA_GEOFENCE.items():
         center_lat, center_lon = cfg["center"]
@@ -183,24 +207,30 @@ def suggest_area_from_location(lat, lon):
         distance = haversine_km(lat, lon, center_lat, center_lon)
         if distance <= radius_km:
             matches.append((area, distance))
+
     if not matches:
         return None
+
     matches.sort(key=lambda x: x[1])
     return matches[0][0]
 
-def get_setting(key, default=None):
-    row = cur.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return row[0] if row else default
 
-def set_setting(key, value):
+def get_setting(key: str, default=None):
+    row = cur.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
     cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
 
-def autopilot_enabled():
+
+def autopilot_enabled() -> bool:
     return get_setting("autopilot_enabled", "on") == "on"
 
+
 # ================= AUTOPILOT =================
-def get_time_bucket():
+def get_time_bucket() -> str:
     hour = now().hour
     if 7 <= hour < 11:
         return "morning"
@@ -211,6 +241,7 @@ def get_time_bucket():
     if 20 <= hour <= 23 or 0 <= hour < 3:
         return "night"
     return "late_night"
+
 
 def get_autopilot_profile():
     bucket = get_time_bucket()
@@ -227,7 +258,7 @@ def get_autopilot_profile():
                 ("Ekkamai", "Chill", 3),
                 ("Silom / Sathorn", "Work", 4),
                 ("Chinatown", "Explore", 1),
-            ]
+            ],
         }
 
     if bucket == "midday":
@@ -243,7 +274,7 @@ def get_autopilot_profile():
                 ("Ekkamai", "Chill", 3),
                 ("Thonglor", "Social", 2),
                 ("Sukhumvit", "Explore", 2),
-            ]
+            ],
         }
 
     if bucket == "evening":
@@ -259,7 +290,7 @@ def get_autopilot_profile():
                 ("Chinatown", "Explore", 4),
                 ("Sukhumvit", "Explore", 3),
                 ("Khao San / Old Town", "Explore", 2),
-            ]
+            ],
         }
 
     if bucket == "night":
@@ -275,7 +306,7 @@ def get_autopilot_profile():
                 ("Chinatown", "Explore", 4),
                 ("Chinatown", "Drinks", 2),
                 ("Sukhumvit", "Social", 4),
-            ]
+            ],
         }
 
     return {
@@ -286,26 +317,27 @@ def get_autopilot_profile():
             ("Thonglor", "Chill", 2),
             ("Khao San / Old Town", "Drinks", 1),
             ("Ari", "Chill", 1),
-        ]
+        ],
     }
+
 
 def count_active_by_source():
     cleanup()
-    rows = cur.execute(
-        "SELECT source, COUNT(*) FROM checkins GROUP BY source"
-    ).fetchall()
+    rows = cur.execute("SELECT source, COUNT(*) as count FROM checkins GROUP BY source").fetchall()
     data = {"user": 0, "ignite": 0, "auto": 0}
-    for source, count in rows:
-        data[source] = count
+    for row in rows:
+        data[row["source"]] = row["count"]
     return data
 
-def clear_auto_checkins():
+
+def clear_auto_checkins() -> int:
     cur.execute("DELETE FROM checkins WHERE source = 'auto'")
     deleted = cur.rowcount
     conn.commit()
     return deleted
 
-def create_auto_checkins():
+
+def create_auto_checkins() -> int:
     if not autopilot_enabled():
         return 0
 
@@ -335,13 +367,14 @@ def create_auto_checkins():
     for i in range(needed):
         area, vibe = random.choice(weighted_pool)
 
-        if get_time_bucket() == "morning":
+        bucket = get_time_bucket()
+        if bucket == "morning":
             duration_label = random.choice(["30 min", "1 hour", "1 hour", "2 hours"])
-        elif get_time_bucket() == "midday":
+        elif bucket == "midday":
             duration_label = random.choice(["30 min", "1 hour", "2 hours"])
-        elif get_time_bucket() == "evening":
+        elif bucket == "evening":
             duration_label = random.choice(["1 hour", "2 hours", "2 hours"])
-        elif get_time_bucket() == "night":
+        elif bucket == "night":
             duration_label = random.choice(["1 hour", "2 hours", "Tonight"])
         else:
             duration_label = random.choice(["30 min", "1 hour"])
@@ -351,19 +384,41 @@ def create_auto_checkins():
 
         cur.execute(
             "INSERT INTO checkins (user_id, area, vibe, expires_at, source) VALUES (?, ?, ?, ?, ?)",
-            (fake_user_id, area, vibe, expires, "auto")
+            (fake_user_id, area, vibe, expires, "auto"),
         )
         created += 1
 
     conn.commit()
     return created
 
+
+# ================= UX HELPERS =================
+def private_checkin_button(bot_username: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Check in 📍", url=f"https://t.me/{bot_username}")]]
+    )
+
+
+async def send_private_checkin_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bot_username = context.bot.username
+    await update.message.reply_text(
+        "Please continue check-in in the private chat with the bot 👇",
+        reply_markup=private_checkin_button(bot_username),
+    )
+
+
 # ================= USER FLOW =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_type = update.effective_chat.type
+    if chat_type in ("group", "supergroup"):
+        await send_private_checkin_prompt(update, context)
+        return
+
     await update.message.reply_text(
         "Welcome to Pulse Bangkok\n\nSee what’s happening around you.",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
+
 
 async def safety(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -372,19 +427,22 @@ async def safety(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• No exact location\n"
         "• Public places only\n"
         "• End your check-in anytime",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
+
 async def checkin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_type = update.effective_chat.type
+    if chat_type in ("group", "supergroup"):
+        await send_private_checkin_prompt(update, context)
+        return ConversationHandler.END
+
     user_id = update.effective_user.id
     row = cur.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()
 
-    if row and row[0]:
-        context.user_data["name"] = row[0]
-        await update.message.reply_text(
-            "Where are you around? 👇",
-            reply_markup=area_menu()
-        )
+    if row and row["name"]:
+        context.user_data["name"] = row["name"]
+        await update.message.reply_text("Where are you around? 👇", reply_markup=area_menu())
         return ASK_AREA
 
     await update.message.reply_text(
@@ -392,29 +450,23 @@ async def checkin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ASK_NAME
 
+
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = (update.message.text or "").strip()
 
     if not validate_name(name):
-        await update.message.reply_text(
-            "Invalid name. Use simple English letters only."
-        )
+        await update.message.reply_text("Invalid name. Use simple English letters only.")
         return ASK_NAME
 
     user_id = update.effective_user.id
     context.user_data["name"] = name
 
-    cur.execute(
-        "INSERT OR REPLACE INTO users (id, name) VALUES (?, ?)",
-        (user_id, name)
-    )
+    cur.execute("INSERT OR REPLACE INTO users (id, name) VALUES (?, ?)", (user_id, name))
     conn.commit()
 
-    await update.message.reply_text(
-        "Where are you around? 👇",
-        reply_markup=area_menu()
-    )
+    await update.message.reply_text("Where are you around? 👇", reply_markup=area_menu())
     return ASK_AREA
+
 
 async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.location:
@@ -428,34 +480,27 @@ async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text not in AREAS:
             await update.message.reply_text(
                 "Please choose an area from the list 👇",
-                reply_markup=area_menu()
+                reply_markup=area_menu(),
             )
             return ASK_AREA
 
         context.user_data["area"] = text
 
-    await update.message.reply_text(
-        "What’s your vibe?",
-        reply_markup=vibe_menu()
-    )
+    await update.message.reply_text("What’s your vibe?", reply_markup=vibe_menu())
     return ASK_VIBE
+
 
 async def get_vibe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vibe = (update.message.text or "").strip()
 
     if vibe not in VIBES:
-        await update.message.reply_text(
-            "Please choose a valid vibe.",
-            reply_markup=vibe_menu()
-        )
+        await update.message.reply_text("Please choose a valid vibe.", reply_markup=vibe_menu())
         return ASK_VIBE
 
     context.user_data["vibe"] = vibe
-    await update.message.reply_text(
-        "How long?",
-        reply_markup=duration_menu()
-    )
+    await update.message.reply_text("How long?", reply_markup=duration_menu())
     return ASK_DURATION
+
 
 async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     duration = (update.message.text or "").strip()
@@ -463,7 +508,7 @@ async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if duration not in DURATIONS:
         await update.message.reply_text(
             "Please choose a valid duration.",
-            reply_markup=duration_menu()
+            reply_markup=duration_menu(),
         )
         return ASK_DURATION
 
@@ -482,9 +527,10 @@ async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"Checked in ✅\n\nArea: {area}\nVibe: {vibe}\nDuration: {duration}",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
     return ConversationHandler.END
+
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -496,28 +542,24 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchone()
 
     if not row:
-        await update.message.reply_text(
-            "No active check-in.",
-            reply_markup=main_menu()
-        )
+        await update.message.reply_text("No active check-in.", reply_markup=main_menu())
         return
 
-    area, vibe, expires_at = row
+    area, vibe, expires_at = row["area"], row["vibe"], row["expires_at"]
     expires_time = datetime.fromisoformat(expires_at).strftime("%H:%M")
 
     await update.message.reply_text(
         f"Your status:\n\nArea: {area}\nVibe: {vibe}\nActive until: {expires_time}",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
+
 
 async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     cur.execute("DELETE FROM checkins WHERE user_id = ?", (user_id,))
     conn.commit()
-    await update.message.reply_text(
-        "Check-in ended.",
-        reply_markup=main_menu()
-    )
+    await update.message.reply_text("Check-in ended.", reply_markup=main_menu())
+
 
 # ================= ADMIN =================
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -539,6 +581,7 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/get_chat_id"
     )
 
+
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -546,11 +589,11 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cleanup()
 
     rows = cur.execute(
-        "SELECT area, source, COUNT(*) FROM checkins GROUP BY area, source ORDER BY area, source"
+        "SELECT area, source, COUNT(*) as count FROM checkins GROUP BY area, source ORDER BY area, source"
     ).fetchall()
 
     totals = cur.execute(
-        "SELECT source, COUNT(*) FROM checkins GROUP BY source ORDER BY source"
+        "SELECT source, COUNT(*) as count FROM checkins GROUP BY source ORDER BY source"
     ).fetchall()
 
     if not rows:
@@ -560,8 +603,8 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["Stats:", ""]
     lines.append("Totals by source:")
     total_map = {"user": 0, "auto": 0, "ignite": 0}
-    for source, count in totals:
-        total_map[source] = count
+    for row in totals:
+        total_map[row["source"]] = row["count"]
 
     lines.append(f"• Real users: {total_map['user']}")
     lines.append(f"• Autopilot: {total_map['auto']}")
@@ -569,7 +612,10 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append("")
 
     grouped = {}
-    for area, source, count in rows:
+    for row in rows:
+        area = row["area"]
+        source = row["source"]
+        count = row["count"]
         grouped.setdefault(area, {"user": 0, "auto": 0, "ignite": 0})
         grouped[area][source] = count
 
@@ -581,6 +627,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("")
 
     await update.message.reply_text("\n".join(lines))
+
 
 async def admin_ignite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -624,7 +671,7 @@ async def admin_ignite(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fake_user_id = 900000000 + base + i
             cur.execute(
                 "INSERT INTO checkins (user_id, area, vibe, expires_at, source) VALUES (?, ?, ?, ?, ?)",
-                (fake_user_id, area, vibe, expires, "ignite")
+                (fake_user_id, area, vibe, expires, "ignite"),
             )
 
         conn.commit()
@@ -635,6 +682,7 @@ async def admin_ignite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
+
 async def admin_clear_ignite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -644,12 +692,14 @@ async def admin_clear_ignite(update: Update, context: ContextTypes.DEFAULT_TYPE)
     conn.commit()
     await update.message.reply_text(f"Deleted {deleted} ignite check-ins.")
 
+
 async def admin_clear_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
     deleted = clear_auto_checkins()
     await update.message.reply_text(f"Deleted {deleted} autopilot check-ins.")
+
 
 async def admin_reset_checkins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -659,6 +709,7 @@ async def admin_reset_checkins(update: Update, context: ContextTypes.DEFAULT_TYP
     deleted = cur.rowcount
     conn.commit()
     await update.message.reply_text(f"All check-ins cleared. Deleted {deleted} total rows.")
+
 
 async def admin_toggle_autopilot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -671,6 +722,7 @@ async def admin_toggle_autopilot(update: Update, context: ContextTypes.DEFAULT_T
 
     set_setting("autopilot_enabled", raw)
     await update.message.reply_text(f"Autopilot is now {raw}.")
+
 
 async def admin_autopilot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -689,6 +741,7 @@ async def admin_autopilot_status(update: Update, context: ContextTypes.DEFAULT_T
         f"Ignite: {counts.get('ignite', 0)}"
     )
 
+
 async def admin_run_autopilot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -696,20 +749,20 @@ async def admin_run_autopilot(update: Update, context: ContextTypes.DEFAULT_TYPE
     created = create_auto_checkins()
     await update.message.reply_text(f"Autopilot ran. Created {created} auto check-ins.")
 
+
 async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
     chat = update.effective_chat
-    await update.message.reply_text(
-        f"Chat title: {chat.title}\nChat ID: {chat.id}"
-    )
+    await update.message.reply_text(f"Chat title: {chat.title}\nChat ID: {chat.id}")
+
 
 # ================= SUMMARY =================
-def format_summary_text():
+def format_summary_text() -> str:
     cleanup()
     rows = cur.execute(
-        "SELECT area, vibe, COUNT(*) FROM checkins GROUP BY area, vibe ORDER BY area, vibe"
+        "SELECT area, vibe, COUNT(*) as count FROM checkins GROUP BY area, vibe ORDER BY area, vibe"
     ).fetchall()
 
     if not rows:
@@ -717,11 +770,14 @@ def format_summary_text():
             "👀 Pulse Bangkok — Live Now\n\n"
             "Not much activity yet in the pilot areas.\n\n"
             "Want to show up in the next update?\n"
-            "Check in through the bot."
+            "Tap below to check in."
         )
 
     grouped = {}
-    for area, vibe, count in rows:
+    for row in rows:
+        area = row["area"]
+        vibe = row["vibe"]
+        count = row["count"]
         grouped.setdefault(area, [])
         grouped[area].append((vibe, count))
 
@@ -740,8 +796,9 @@ def format_summary_text():
             lines.append(f"• {count} {vibe_map.get(vibe, vibe.lower())}")
         lines.append("")
 
-    lines.append("Check in through the bot to appear in the next update.")
+    lines.append("👇 Tap below to check in")
     return "\n".join(lines)
+
 
 async def summary_job(context: ContextTypes.DEFAULT_TYPE):
     if not CHANNEL_ID:
@@ -751,9 +808,16 @@ async def summary_job(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         text = format_summary_text()
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+        keyboard = private_checkin_button(context.bot.username)
+
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text,
+            reply_markup=keyboard,
+        )
     except Exception as e:
         print(f"Summary send failed: {e}")
+
 
 # ================= MAIN =================
 def main():
@@ -791,6 +855,7 @@ def main():
         app.job_queue.run_repeating(summary_job, interval=SUMMARY_INTERVAL_MIN * 60, first=10)
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
