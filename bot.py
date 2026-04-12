@@ -197,7 +197,7 @@ def get_time_bucket():
         return "midday"
     if 16 <= hour < 20:
         return "evening"
-    if 20 <= hour < 3 or hour == 0 or hour == 1 or hour == 2:
+    if 20 <= hour <= 23 or 0 <= hour < 3:
         return "night"
     return "late_night"
 
@@ -206,71 +206,76 @@ def get_autopilot_profile():
 
     if bucket == "morning":
         return {
-            "target_min": 18,
-            "target_max": 24,
+            "target_min": 22,
+            "target_max": 30,
             "mix": [
-                ("Ari", "Work", 4),
-                ("Ari", "Chill", 2),
-                ("Sukhumvit", "Work", 4),
-                ("Ekkamai", "Work", 3),
-                ("Ekkamai", "Chill", 2),
-                ("Silom / Sathorn", "Work", 3),
+                ("Ari", "Work", 6),
+                ("Ari", "Chill", 3),
+                ("Sukhumvit", "Work", 5),
+                ("Ekkamai", "Work", 4),
+                ("Ekkamai", "Chill", 3),
+                ("Silom / Sathorn", "Work", 4),
+                ("Chinatown", "Explore", 1),
             ]
         }
 
     if bucket == "midday":
         return {
-            "target_min": 18,
-            "target_max": 25,
+            "target_min": 20,
+            "target_max": 28,
             "mix": [
-                ("Ari", "Work", 3),
-                ("Sukhumvit", "Work", 3),
-                ("Silom / Sathorn", "Work", 3),
-                ("Chinatown", "Explore", 3),
-                ("Khao San / Old Town", "Explore", 2),
-                ("Ekkamai", "Chill", 2),
-                ("Thonglor", "Social", 1),
+                ("Ari", "Work", 4),
+                ("Sukhumvit", "Work", 4),
+                ("Silom / Sathorn", "Work", 4),
+                ("Chinatown", "Explore", 4),
+                ("Khao San / Old Town", "Explore", 3),
+                ("Ekkamai", "Chill", 3),
+                ("Thonglor", "Social", 2),
+                ("Sukhumvit", "Explore", 2),
             ]
         }
 
     if bucket == "evening":
         return {
-            "target_min": 20,
-            "target_max": 28,
+            "target_min": 24,
+            "target_max": 34,
             "mix": [
-                ("Thonglor", "Social", 4),
-                ("Ekkamai", "Social", 3),
-                ("Ekkamai", "Drinks", 2),
-                ("Silom / Sathorn", "Social", 3),
-                ("Ari", "Chill", 2),
-                ("Chinatown", "Explore", 3),
-                ("Sukhumvit", "Explore", 2),
+                ("Thonglor", "Social", 6),
+                ("Ekkamai", "Social", 4),
+                ("Ekkamai", "Drinks", 3),
+                ("Silom / Sathorn", "Social", 4),
+                ("Ari", "Chill", 3),
+                ("Chinatown", "Explore", 4),
+                ("Sukhumvit", "Explore", 3),
+                ("Khao San / Old Town", "Explore", 2),
             ]
         }
 
     if bucket == "night":
         return {
-            "target_min": 20,
-            "target_max": 30,
+            "target_min": 26,
+            "target_max": 38,
             "mix": [
-                ("Thonglor", "Drinks", 4),
-                ("Thonglor", "Social", 3),
-                ("Ekkamai", "Drinks", 3),
-                ("Khao San / Old Town", "Social", 4),
-                ("Khao San / Old Town", "Explore", 2),
-                ("Chinatown", "Explore", 3),
-                ("Sukhumvit", "Social", 2),
+                ("Thonglor", "Drinks", 6),
+                ("Thonglor", "Social", 5),
+                ("Ekkamai", "Drinks", 4),
+                ("Khao San / Old Town", "Social", 6),
+                ("Khao San / Old Town", "Explore", 3),
+                ("Chinatown", "Explore", 4),
+                ("Chinatown", "Drinks", 2),
+                ("Sukhumvit", "Social", 4),
             ]
         }
 
-    # late_night: 03:00–07:00
+    # late_night 03:00-07:00
     return {
-        "target_min": 2,
-        "target_max": 5,
+        "target_min": 3,
+        "target_max": 6,
         "mix": [
-            ("Sukhumvit", "Chill", 2),
+            ("Sukhumvit", "Chill", 3),
+            ("Thonglor", "Chill", 2),
             ("Khao San / Old Town", "Drinks", 1),
-            ("Thonglor", "Chill", 1),
+            ("Ari", "Chill", 1),
         ]
     }
 
@@ -301,7 +306,6 @@ def create_auto_checkins():
     profile = get_autopilot_profile()
     target = random.randint(profile["target_min"], profile["target_max"])
 
-    # clear previous auto layer before creating a fresh one
     clear_auto_checkins()
 
     if real_count >= 30:
@@ -320,12 +324,21 @@ def create_auto_checkins():
 
     for i in range(needed):
         area, vibe = random.choice(weighted_pool)
-        duration_label = random.choice(["30 min", "1 hour", "2 hours"])
-        if get_time_bucket() == "night" and random.random() < 0.35:
-            duration_label = "Tonight"
+
+        if get_time_bucket() == "morning":
+            duration_label = random.choice(["30 min", "1 hour", "1 hour", "2 hours"])
+        elif get_time_bucket() == "midday":
+            duration_label = random.choice(["30 min", "1 hour", "2 hours"])
+        elif get_time_bucket() == "evening":
+            duration_label = random.choice(["1 hour", "2 hours", "2 hours"])
+        elif get_time_bucket() == "night":
+            duration_label = random.choice(["1 hour", "2 hours", "Tonight"])
+        else:
+            duration_label = random.choice(["30 min", "1 hour"])
 
         expires = compute_expiry(now(), duration_label).isoformat()
         fake_user_id = 800000000 + base + i
+
         cur.execute(
             "INSERT INTO checkins (user_id, area, vibe, expires_at, source) VALUES (?, ?, ?, ?, ?)",
             (fake_user_id, area, vibe, expires, "auto")
@@ -459,7 +472,6 @@ async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     cur.execute("DELETE FROM checkins WHERE user_id = ?", (user_id,))
     conn.commit()
-
     await update.message.reply_text("Check-in ended.", reply_markup=main_menu())
 
 # ================= ADMIN =================
@@ -472,13 +484,13 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/admin_help\n"
         "/admin_stats\n"
         "/admin_ignite Area|Vibe|Duration|Count\n"
-        "Example: /admin_ignite Ari|Work|2 hours|3\n"
         "/admin_clear_ignite\n"
         "/admin_clear_auto\n"
         "/admin_reset_checkins\n"
         "/admin_toggle_autopilot on\n"
         "/admin_toggle_autopilot off\n"
-        "/admin_autopilot_status"
+        "/admin_autopilot_status\n"
+        "/admin_run_autopilot"
     )
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -560,8 +572,8 @@ async def admin_ignite(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         cleanup()
         expires = compute_expiry(now(), duration_text).isoformat()
-
         base = int(now().timestamp())
+
         for i in range(count):
             fake_user_id = 900000000 + base + i
             cur.execute(
@@ -630,6 +642,13 @@ async def admin_autopilot_status(update: Update, context: ContextTypes.DEFAULT_T
         f"Auto: {counts.get('auto', 0)}\n"
         f"Ignite: {counts.get('ignite', 0)}"
     )
+
+async def admin_run_autopilot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    created = create_auto_checkins()
+    await update.message.reply_text(f"Autopilot ran. Created {created} auto check-ins.")
 
 # ================= SUMMARY =================
 def format_summary_text():
@@ -705,6 +724,7 @@ def main():
     app.add_handler(CommandHandler("admin_reset_checkins", admin_reset_checkins))
     app.add_handler(CommandHandler("admin_toggle_autopilot", admin_toggle_autopilot))
     app.add_handler(CommandHandler("admin_autopilot_status", admin_autopilot_status))
+    app.add_handler(CommandHandler("admin_run_autopilot", admin_run_autopilot))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^Safety rules$"), safety))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^My status$"), status))
@@ -712,7 +732,7 @@ def main():
     app.add_handler(conv)
 
     if app.job_queue:
-        app.job_queue.run_repeating(summary_job, interval=SUMMARY_INTERVAL_MIN * 60, first=60)
+        app.job_queue.run_repeating(summary_job, interval=SUMMARY_INTERVAL_MIN * 60, first=10)
 
     app.run_polling()
 
