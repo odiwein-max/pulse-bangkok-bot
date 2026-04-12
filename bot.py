@@ -267,7 +267,6 @@ def get_autopilot_profile():
             ]
         }
 
-    # late_night 03:00-07:00
     return {
         "target_min": 3,
         "target_max": 6,
@@ -490,7 +489,8 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/admin_toggle_autopilot on\n"
         "/admin_toggle_autopilot off\n"
         "/admin_autopilot_status\n"
-        "/admin_run_autopilot"
+        "/admin_run_autopilot\n"
+        "/get_chat_id"
     )
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -650,6 +650,15 @@ async def admin_run_autopilot(update: Update, context: ContextTypes.DEFAULT_TYPE
     created = create_auto_checkins()
     await update.message.reply_text(f"Autopilot ran. Created {created} auto check-ins.")
 
+async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"Chat title: {chat.title}\nChat ID: {chat.id}"
+    )
+
 # ================= SUMMARY =================
 def format_summary_text():
     cleanup()
@@ -725,6 +734,7 @@ def main():
     app.add_handler(CommandHandler("admin_toggle_autopilot", admin_toggle_autopilot))
     app.add_handler(CommandHandler("admin_autopilot_status", admin_autopilot_status))
     app.add_handler(CommandHandler("admin_run_autopilot", admin_run_autopilot))
+    app.add_handler(CommandHandler("get_chat_id", get_chat_id))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^Safety rules$"), safety))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^My status$"), status))
