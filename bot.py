@@ -23,6 +23,7 @@ from telegram.ext import (
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+LIVE_MAP_URL = os.getenv("LIVE_MAP_URL")
 ADMIN_IDS = {x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()}
 SUMMARY_INTERVAL_MIN = int(os.getenv("SUMMARY_INTERVAL_MIN", "30"))
 
@@ -228,17 +229,18 @@ def autopilot_enabled() -> bool:
     return get_setting("autopilot_enabled", "on") == "on"
 
 
-def private_checkin_button(bot_username: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Check in 📍", url=f"https://t.me/{bot_username}")]]
-    )
+def summary_buttons(bot_username: str) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("Check in 📍", url=f"https://t.me/{bot_username}")]]
+    if LIVE_MAP_URL:
+        rows.append([InlineKeyboardButton("Open Live Map 🗺️", url=LIVE_MAP_URL)])
+    return InlineKeyboardMarkup(rows)
 
 
 async def send_private_checkin_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_username = context.bot.username
     await update.message.reply_text(
         "Want to appear in the next Pulse update?\n\nCheck in with the bot here 👇",
-        reply_markup=private_checkin_button(bot_username),
+        reply_markup=summary_buttons(bot_username),
     )
 
 
@@ -685,7 +687,7 @@ async def welcome_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text(
         text,
-        reply_markup=private_checkin_button(bot_username),
+        reply_markup=summary_buttons(bot_username),
     )
 
 
@@ -895,7 +897,7 @@ async def summary_job(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         text = format_summary_text()
-        keyboard = private_checkin_button(context.bot.username)
+        keyboard = summary_buttons(context.bot.username)
 
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
