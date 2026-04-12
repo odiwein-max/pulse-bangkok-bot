@@ -117,10 +117,13 @@ def cleanup():
     conn.commit()
 
 def main_menu():
-    return ReplyKeyboardMarkup([
-        ["Check in", "My status"],
-        ["End check-in", "Safety rules"]
-    ], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        [
+            ["Check in", "My status"],
+            ["End check-in", "Safety rules"]
+        ],
+        resize_keyboard=True
+    )
 
 def area_menu():
     return ReplyKeyboardMarkup(
@@ -136,10 +139,18 @@ def area_menu():
     )
 
 def vibe_menu():
-    return ReplyKeyboardMarkup([[v] for v in VIBES], resize_keyboard=True, one_time_keyboard=True)
+    return ReplyKeyboardMarkup(
+        [[v] for v in VIBES],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
 
 def duration_menu():
-    return ReplyKeyboardMarkup([[d] for d in DURATIONS], resize_keyboard=True, one_time_keyboard=True)
+    return ReplyKeyboardMarkup(
+        [[d] for d in DURATIONS],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
 
 def validate_name(name: str) -> bool:
     name = (name or "").strip()
@@ -370,7 +381,10 @@ async def checkin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if row and row[0]:
         context.user_data["name"] = row[0]
-        await update.message.reply_text("Where are you around?", reply_markup=area_menu())
+        await update.message.reply_text(
+            "Where are you around? 👇",
+            reply_markup=area_menu()
+        )
         return ASK_AREA
 
     await update.message.reply_text(
@@ -382,15 +396,24 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = (update.message.text or "").strip()
 
     if not validate_name(name):
-        await update.message.reply_text("Invalid name. Use simple English letters only.")
+        await update.message.reply_text(
+            "Invalid name. Use simple English letters only."
+        )
         return ASK_NAME
 
     user_id = update.effective_user.id
     context.user_data["name"] = name
-    cur.execute("INSERT OR REPLACE INTO users (id, name) VALUES (?, ?)", (user_id, name))
+
+    cur.execute(
+        "INSERT OR REPLACE INTO users (id, name) VALUES (?, ?)",
+        (user_id, name)
+    )
     conn.commit()
 
-    await update.message.reply_text("Where are you around?", reply_markup=area_menu())
+    await update.message.reply_text(
+        "Where are you around? 👇",
+        reply_markup=area_menu()
+    )
     return ASK_AREA
 
 async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -400,31 +423,48 @@ async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
         suggested = suggest_area_from_location(lat, lon)
         context.user_data["area"] = suggested if suggested else "Sukhumvit"
     else:
-        area = (update.message.text or "").strip()
-        if area not in AREAS:
-            await update.message.reply_text("Please choose a valid area.", reply_markup=area_menu())
-            return ASK_AREA
-        context.user_data["area"] = area
+        text = (update.message.text or "").strip()
 
-    await update.message.reply_text("What’s your vibe?", reply_markup=vibe_menu())
+        if text not in AREAS:
+            await update.message.reply_text(
+                "Please choose an area from the list 👇",
+                reply_markup=area_menu()
+            )
+            return ASK_AREA
+
+        context.user_data["area"] = text
+
+    await update.message.reply_text(
+        "What’s your vibe?",
+        reply_markup=vibe_menu()
+    )
     return ASK_VIBE
 
 async def get_vibe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vibe = (update.message.text or "").strip()
 
     if vibe not in VIBES:
-        await update.message.reply_text("Please choose a valid vibe.", reply_markup=vibe_menu())
+        await update.message.reply_text(
+            "Please choose a valid vibe.",
+            reply_markup=vibe_menu()
+        )
         return ASK_VIBE
 
     context.user_data["vibe"] = vibe
-    await update.message.reply_text("How long?", reply_markup=duration_menu())
+    await update.message.reply_text(
+        "How long?",
+        reply_markup=duration_menu()
+    )
     return ASK_DURATION
 
 async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     duration = (update.message.text or "").strip()
 
     if duration not in DURATIONS:
-        await update.message.reply_text("Please choose a valid duration.", reply_markup=duration_menu())
+        await update.message.reply_text(
+            "Please choose a valid duration.",
+            reply_markup=duration_menu()
+        )
         return ASK_DURATION
 
     user_id = update.effective_user.id
@@ -456,7 +496,10 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchone()
 
     if not row:
-        await update.message.reply_text("No active check-in.", reply_markup=main_menu())
+        await update.message.reply_text(
+            "No active check-in.",
+            reply_markup=main_menu()
+        )
         return
 
     area, vibe, expires_at = row
@@ -471,7 +514,10 @@ async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     cur.execute("DELETE FROM checkins WHERE user_id = ?", (user_id,))
     conn.commit()
-    await update.message.reply_text("Check-in ended.", reply_markup=main_menu())
+    await update.message.reply_text(
+        "Check-in ended.",
+        reply_markup=main_menu()
+    )
 
 # ================= ADMIN =================
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
