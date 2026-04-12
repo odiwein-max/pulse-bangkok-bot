@@ -8,187 +8,420 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-ADMIN_IDS = os.getenv("ADMIN_USER_IDS", "")
+ADMIN_IDS_RAW = os.getenv("ADMIN_USER_IDS", "")
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
 
 ASK_NAME, ASK_AREA, ASK_VIBE, ASK_DURATION = range(4)
 
 AREAS = [
-    "Sukhumvit", "Thonglor", "Ekkamai", "Ari",
-    "Silom / Sathorn", "Khao San / Old Town", "Chinatown"
+    "Sukhumvit",
+    "Thonglor",
+    "Ekkamai",
+    "Ari",
+    "Silom / Sathorn",
+    "Khao San / Old Town",
+    "Chinatown",
 ]
 
 VIBES = ["Work", "Social", "Chill", "Explore", "Drinks"]
 DURATIONS = ["30 min", "1 hour", "2 hours", "Tonight"]
 
+ADMIN_IDS = {x.strip() for x in ADMIN_IDS_RAW.split(",") if x.strip()}
+
+# Bangkok pilot area mapping
+AREA_GEOFENCE = {
+    "Sukhumvit": {"center": (13.7370, 100.5600), "radius_km": 2.0},
+    "Thonglor": {"center": (13.7308, 100.5810), "radius_km": 1.0},
+    "Ekkamai": {"center": (13.7197, 100.5856), "radius_km": 1.0},
+    "Ari": {"center": (13.7799, 100.5450), "radius_km": 1.2},
+    "Silom / Sathorn": {"center": (13.7240, 100.5300), "radius_km": 1.5},
+    "Khao San / Old Town": {"center": (13.7589, 100.4970), "radius_km": 1.0},
+    "Chinatown": {"center": (13.7396, 100.5098), "radius_km": 1.0},
+}
+
 # ================= DATABASE =================
 conn = sqlite3.connect("db.sqlite3", check_same_thread=False)
 cur = conn.cursor()
 
-cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")
-cur.execute("""CREATE TABLE IF NOT EXISTS checkins (
-    user_id INTEGER,
-    area TEXT,
-    vibe TEXT,
-    expires_at TEXT
-)""")
+cur.execute(
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        name TEXT
+    )
+    """
+)
+
+cur.execute(
+    """
+    CREATE TABLE IF NOT EXISTS checkins (
+        user_id INTEGER,
+        area TEXT,
+        vibe TEXT,
+        expires_at TEXT
+    )
+    """
+)
+
 conn.commit()
 
-# ================= HELPERS =================
 
+# ================= HELPERS =================
 def now():
     return datetime.now(BANGKOK_TZ)
 
+
+def compute_expiry(start_dt: datetime, duration_label: str) -> datetime:
+    if duration_label == "30 min":
+        return start_dt + timedelta(minutes=30)
+    if duration_label == "1 hour":
+        return start_dt + timedelta(hours=1)
+    if duration_label == "2 hours":
+        return start_dt + timedelta(hours=2)
+    if duration_label == "Tonight":
+        tonight = start_dt.replace(hour=23, minute=59, second=0, microsecond=0)
+        if tonight <= start_dt:
+            tonight = start_dt + timedelta(hours=4)
+        return tonight
+    return start_dt + timedelta(hours=1)
+
+
 def validate_name(name):
+    name = (name or "").strip()
     if len(name) < 2 or len(name) > 20:
         return False
     if not name.replace(" ", "").isalpha():
         return False
+    blacklist = {
+        "admin", "support", "bot", "anonymous", "unknown",
+        "test", "null", "none", "system"
+    }
+    if name.lower() in blacklist:
+        return False
     return True
 
+
 def main_menu():
-    return ReplyKeyboardMarkup([
-        ["Check in", "My status"],
-        ["End check-in"],
-        ["Safety rules"]
-    ], resize_keyboard=True)
-
-# ================= HANDLERS =================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Welcome to Pulse Bangkok\n\nSee what's happening around you.",
-        reply_markup=main_menu()
+    return ReplyKeyboardMarkup(
+        [
+            ["Check in", "My status"],
+            ["End check-in", "Safety rules"],
+        ],
+        resize_keyboard=True,
     )
 
-async def safety(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Safety rules:\n• Area only\n• No exact location\n• Public places only",
-        reply_markup=main_menu()
-    )
 
-async def checkin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("What should we call you?")
-    return ASK_NAME
-
-async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.message.text
-    if not validate_name(name):
-        await update.message.reply_text("Invalid name. Use simple English letters.")
-        return ASK_NAME
-
-    context.user_data["name"] = name
-    await update.message.reply_text("Where are you around?",
-        reply_markup=ReplyKeyboardMarkup([
-            [KeyboardButton("📍 Use my location", request_location=True)],
-            AREAS[:2], AREAS[2:4], AREAS[4:6], [AREAS[6]]
-        ], resize_keyboard=True)
-    )
-    return ASK_AREA
-
-async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.location:
-        context.user_data["area"] = "Sukhumvit"
-    else:
-        context.user_data["area"] = update.message.text
-
-    await update.message.reply_text("What's your vibe?",
-        reply_markup=ReplyKeyboardMarkup([[v] for v in VIBES], resize_keyboard=True))
-    return ASK_VIBE
-
-async def get_vibe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["vibe"] = update.message.text
-
-    await update.message.reply_text("How long?",
-        reply_markup=ReplyKeyboardMarkup([[d] for d in DURATIONS], resize_keyboard=True))
-    return ASK_DURATION
-
-async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    duration = update.message.text
-    user_id = update.effective_user.id
-
-    expires = now() + timedelta(hours=1)
-
-    cur.execute("DELETE FROM checkins WHERE user_id=?", (user_id,))
-    cur.execute("INSERT INTO checkins VALUES (?, ?, ?, ?)",
-                (user_id, context.user_data["area"], context.user_data["vibe"], expires.isoformat()))
+def cleanup_expired_checkins():
+    current = now().isoformat()
+    cur.execute("DELETE FROM checkins WHERE expires_at <= ?", (current,))
     conn.commit()
 
-    await update.message.reply_text(
-        f"Checked in:\n{context.user_data['area']} | {context.user_data['vibe']}",
-        reply_markup=main_menu()
-    )
-    return ConversationHandler.END
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    row = cur.execute("SELECT area, vibe FROM checkins WHERE user_id=?", (user_id,)).fetchone()
-
-    if not row:
-        await update.message.reply_text("No active check-in.", reply_markup=main_menu())
-    else:
-        await update.message.reply_text(f"{row[0]} | {row[1]}", reply_markup=main_menu())
-
-async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    cur.execute("DELETE FROM checkins WHERE user_id=?", (user_id,))
-    conn.commit()
-
-    await update.message.reply_text("Check-in ended.", reply_markup=main_menu())
-
-# ================= ADMIN =================
 
 def is_admin(user_id):
     return str(user_id) in ADMIN_IDS
 
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return r * c
+
+
+def suggest_area_from_location(lat, lon):
+    matches = []
+    for area, cfg in AREA_GEOFENCE.items():
+        center_lat, center_lon = cfg["center"]
+        radius_km = cfg["radius_km"]
+        distance = haversine_km(lat, lon, center_lat, center_lon)
+        if distance <= radius_km:
+            matches.append((area, distance))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda x: x[1])
+    return matches[0][0]
+
+
+# ================= HANDLERS =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Welcome to Pulse Bangkok\n\nSee what’s happening around you.",
+        reply_markup=main_menu()
+    )
+
+
+async def safety(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Safety rules:\n"
+        "• Area only\n"
+        "• No exact location\n"
+        "• Public places only\n"
+        "• End your check-in anytime",
+        reply_markup=main_menu()
+    )
+
+
+async def checkin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    row = cur.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()
+
+    if row and row[0]:
+        context.user_data["name"] = row[0]
+        await update.message.reply_text(
+            "Where are you around?",
+            reply_markup=ReplyKeyboardMarkup(
+                [
+                    [KeyboardButton("📍 Use my location", request_location=True)],
+                    ["Sukhumvit", "Thonglor"],
+                    ["Ekkamai", "Ari"],
+                    ["Silom / Sathorn"],
+                    ["Khao San / Old Town", "Chinatown"],
+                ],
+                resize_keyboard=True,
+            ),
+        )
+        return ASK_AREA
+
+    await update.message.reply_text("What should we call you?")
+    return ASK_NAME
+
+
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = (update.message.text or "").strip()
+
+    if not validate_name(name):
+        await update.message.reply_text("Invalid name. Use simple English letters only.")
+        return ASK_NAME
+
+    user_id = update.effective_user.id
+    context.user_data["name"] = name
+
+    cur.execute("INSERT OR REPLACE INTO users (id, name) VALUES (?, ?)", (user_id, name))
+    conn.commit()
+
+    await update.message.reply_text(
+        "Where are you around?",
+        reply_markup=ReplyKeyboardMarkup(
+            [
+                [KeyboardButton("📍 Use my location", request_location=True)],
+                ["Sukhumvit", "Thonglor"],
+                ["Ekkamai", "Ari"],
+                ["Silom / Sathorn"],
+                ["Khao San / Old Town", "Chinatown"],
+            ],
+            resize_keyboard=True,
+        ),
+    )
+    return ASK_AREA
+
+
+async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.location:
+        lat = update.message.location.latitude
+        lon = update.message.location.longitude
+        suggested = suggest_area_from_location(lat, lon)
+        context.user_data["area"] = suggested if suggested else "Sukhumvit"
+    else:
+        area = (update.message.text or "").strip()
+        if area not in AREAS:
+            await update.message.reply_text("Please choose a valid area.")
+            return ASK_AREA
+        context.user_data["area"] = area
+
+    await update.message.reply_text(
+        "What’s your vibe?",
+        reply_markup=ReplyKeyboardMarkup([[v] for v in VIBES], resize_keyboard=True),
+    )
+    return ASK_VIBE
+
+
+async def get_vibe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    vibe = (update.message.text or "").strip()
+
+    if vibe not in VIBES:
+        await update.message.reply_text("Please choose a valid vibe.")
+        return ASK_VIBE
+
+    context.user_data["vibe"] = vibe
+
+    await update.message.reply_text(
+        "How long?",
+        reply_markup=ReplyKeyboardMarkup([[d] for d in DURATIONS], resize_keyboard=True),
+    )
+    return ASK_DURATION
+
+
+async def finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    duration = (update.message.text or "").strip()
+    if duration not in DURATIONS:
+        await update.message.reply_text("Please choose a valid duration.")
+        return ASK_DURATION
+
+    user_id = update.effective_user.id
+    area = context.user_data["area"]
+    vibe = context.user_data["vibe"]
+    expires = compute_expiry(now(), duration)
+
+    cleanup_expired_checkins()
+    cur.execute("DELETE FROM checkins WHERE user_id = ?", (user_id,))
+    cur.execute(
+        "INSERT INTO checkins (user_id, area, vibe, expires_at) VALUES (?, ?, ?, ?)",
+        (user_id, area, vibe, expires.isoformat()),
+    )
+    conn.commit()
+
+    await update.message.reply_text(
+        f"Checked in ✅\n\nArea: {area}\nVibe: {vibe}\nDuration: {duration}",
+        reply_markup=main_menu()
+    )
+    return ConversationHandler.END
+
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    cleanup_expired_checkins()
+
+    row = cur.execute(
+        "SELECT area, vibe, expires_at FROM checkins WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+
+    if not row:
+        await update.message.reply_text("No active check-in.", reply_markup=main_menu())
+        return
+
+    area, vibe, expires_at = row
+    expires_time = datetime.fromisoformat(expires_at).strftime("%H:%M")
+
+    await update.message.reply_text(
+        f"Your status:\n\nArea: {area}\nVibe: {vibe}\nActive until: {expires_time}",
+        reply_markup=main_menu()
+    )
+
+
+async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    cur.execute("DELETE FROM checkins WHERE user_id = ?", (user_id,))
+    conn.commit()
+
+    await update.message.reply_text("Check-in ended.", reply_markup=main_menu())
+
+
+# ================= ADMIN =================
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
-    rows = cur.execute("SELECT area, COUNT(*) FROM checkins GROUP BY area").fetchall()
+    cleanup_expired_checkins()
+    rows = cur.execute(
+        "SELECT area, COUNT(*) FROM checkins GROUP BY area ORDER BY area"
+    ).fetchall()
+
+    if not rows:
+        await update.message.reply_text("Stats:\nNo active check-ins.")
+        return
 
     text = "Stats:\n"
-    for r in rows:
-        text += f"{r[0]}: {r[1]}\n"
+    for area, count in rows:
+        text += f"{area}: {count}\n"
 
     await update.message.reply_text(text)
+
 
 async def admin_ignite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
-    cur.execute("INSERT INTO checkins VALUES (?, ?, ?, ?)",
-                (999999, "Ari", "Work", (now()+timedelta(hours=1)).isoformat()))
-    conn.commit()
+    try:
+        raw = update.message.text.replace("/admin_ignite", "", 1).strip()
+        parts = [p.strip() for p in raw.split("|")]
 
-    await update.message.reply_text("Area ignited 🔥")
+        if len(parts) != 4:
+            await update.message.reply_text(
+                "Usage: /admin_ignite Area|Vibe|Duration|Count\n"
+                "Example: /admin_ignite Ari|Work|2 hours|3"
+            )
+            return
+
+        area, vibe, duration_text, count_text = parts
+
+        if area not in AREAS:
+            await update.message.reply_text(f"Invalid area. Use one of: {', '.join(AREAS)}")
+            return
+
+        if vibe not in VIBES:
+            await update.message.reply_text(f"Invalid vibe. Use one of: {', '.join(VIBES)}")
+            return
+
+        if duration_text not in DURATIONS:
+            await update.message.reply_text(f"Invalid duration. Use one of: {', '.join(DURATIONS)}")
+            return
+
+        count = int(count_text)
+        if count < 1 or count > 50:
+            await update.message.reply_text("Count must be between 1 and 50.")
+            return
+
+        cleanup_expired_checkins()
+        expires = compute_expiry(now(), duration_text).isoformat()
+
+        # Use unique fake IDs so each injected signal counts separately
+        base_id = int(now().timestamp())
+        for i in range(count):
+            fake_user_id = 900000000 + base_id + i
+            cur.execute(
+                "INSERT INTO checkins (user_id, area, vibe, expires_at) VALUES (?, ?, ?, ?)",
+                (fake_user_id, area, vibe, expires)
+            )
+
+        conn.commit()
+
+        await update.message.reply_text(
+            f"Ignited 🔥\nArea: {area}\nVibe: {vibe}\nDuration: {duration_text}\nCount: {count}"
+        )
+
+    except ValueError:
+        await update.message.reply_text("Count must be a number.")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
 
 # ================= MAIN =================
-
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & filters.Regex("^Check in$"), checkin_start)],
         states={
-            ASK_NAME: [MessageHandler(filters.TEXT, get_name)],
-            ASK_AREA: [MessageHandler(filters.TEXT | filters.LOCATION, get_area)],
-            ASK_VIBE: [MessageHandler(filters.TEXT, get_vibe)],
-            ASK_DURATION: [MessageHandler(filters.TEXT, finish)],
+            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            ASK_AREA: [MessageHandler((filters.TEXT | filters.LOCATION) & ~filters.COMMAND, get_area)],
+            ASK_VIBE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_vibe)],
+            ASK_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, finish)],
         },
-        fallbacks=[]
+        fallbacks=[],
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin_stats", admin_stats))
+    app.add_handler(CommandHandler("admin_ignite", admin_ignite))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^Safety rules$"), safety))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^My status$"), status))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^End check-in$"), end))
-    app.add_handler(CommandHandler("admin_stats", admin_stats))
-    app.add_handler(CommandHandler("admin_ignite", admin_ignite))
     app.add_handler(conv)
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
