@@ -612,7 +612,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = "Welcome to Pulse Bangkok 👋\n\nOpen the map or use the menu below to check in."
 
-    await update.message.reply_text(text, reply_markup=main_menu())
+    await update.message.reply_text(
+        text,
+        reply_markup=main_menu(),
+    )
 
     if LIVE_MAP_URL:
         await update.message.reply_text(
