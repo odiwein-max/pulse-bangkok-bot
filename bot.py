@@ -608,20 +608,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = cur.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()
 
     if row and row["name"]:
-        text = f"Welcome back, {row['name']} 👋\n\nUse the menu below or open the map."
+        text = f"Welcome back, {row['name']} 👋\n\nOpen the map or use the menu below."
     else:
         text = "Welcome to Pulse Bangkok 👋\n\nOpen the map or use the menu below to check in."
 
+    await update.message.reply_text(text, reply_markup=main_menu())
+
     if LIVE_MAP_URL:
         await update.message.reply_text(
-            text,
+            "Quick access 👇",
             reply_markup=summary_buttons(context.bot.username),
         )
-
-    await update.message.reply_text(
-        "Use the menu below 👇",
-        reply_markup=main_menu(),
-    )
 
 
 async def open_map(update: Update, context: ContextTypes.DEFAULT_TYPE):
