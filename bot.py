@@ -12,6 +12,7 @@ from telegram import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    WebAppInfo,   # 👈 תוסיף את השורה הזו
 )
 from telegram.ext import (
     Application,
@@ -146,12 +147,21 @@ def cleanup() -> None:
 
 
 def main_menu() -> ReplyKeyboardMarkup:
+    rows = []
+
+    if LIVE_MAP_URL:
+        rows.append([
+            KeyboardButton("🗺️ Open Map", web_app=WebAppInfo(url=LIVE_MAP_URL)),
+            KeyboardButton("Check in"),
+        ])
+    else:
+        rows.append(["Check in"])
+
+    rows.append(["My status", "End check-in"])
+    rows.append(["Safety rules"])
+
     return ReplyKeyboardMarkup(
-        [
-            ["🗺️ Open Map", "Check in"],
-            ["My status", "End check-in"],
-            ["Safety rules"],
-        ],
+        rows,
         resize_keyboard=True,
         is_persistent=True,
     )
