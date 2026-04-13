@@ -148,10 +148,12 @@ def cleanup() -> None:
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            ["Check in", "My status"],
-            ["End check-in", "Safety rules"],
+            ["🗺️ Open Map", "Check in"],
+            ["My status", "End check-in"],
+            ["Safety rules"],
         ],
         resize_keyboard=True,
+        is_persistent=True,
     )
 
 
@@ -233,18 +235,20 @@ def autopilot_enabled() -> bool:
 
 
 def summary_buttons(bot_username: str) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton("Check in 📍", url=f"https://t.me/{bot_username}")]]
+    rows = []
     if LIVE_MAP_URL:
         rows.append([InlineKeyboardButton("Open Live Map 🗺️", url=LIVE_MAP_URL)])
+    rows.append([InlineKeyboardButton("Check in on Telegram", url=f"https://t.me/{bot_username}")])
     return InlineKeyboardMarkup(rows)
 
 
 async def send_private_checkin_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_username = context.bot.username
     await update.message.reply_text(
-        "Want to appear in the next Pulse update?\n\nCheck in with the bot here 👇",
+        "Want to appear in the next Pulse update?\n\nOpen the live map or check in below 👇",
         reply_markup=summary_buttons(bot_username),
     )
+
 
 # ================= AUTOPILOT =================
 def get_time_bucket() -> str:
@@ -408,6 +412,7 @@ def create_auto_checkins() -> int:
     conn.commit()
     return created
 
+
 # ================= SUMMARY STYLE =================
 def vibe_emoji(vibe: str) -> str:
     return {
@@ -453,7 +458,7 @@ def format_summary_text() -> str:
             "👀 Pulse Bangkok — Live Now\n\n"
             "The city feels quiet right now.\n\n"
             "Want to appear in the next update?\n"
-            "👇 Tap below to check in"
+            "👇 Open the live map or check in below"
         )
 
     grouped = {}
@@ -506,11 +511,13 @@ def format_summary_text() -> str:
         lines.append("Most of the action is still concentrated in one zone.")
 
     lines.append("")
-    lines.append("👇 Tap below to check in")
+    lines.append("👇 Open the live map or check in below")
     return "\n".join(lines)
+
 
 # ================= API =================
 app_flask = Flask(__name__)
+
 
 @app_flask.after_request
 def add_cors_headers(response):
@@ -588,6 +595,8 @@ def api_heatmap():
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app_flask.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+
 # ================= USER FLOW =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.effective_chat.type
@@ -595,10 +604,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_private_checkin_prompt(update, context)
         return
 
+    user_id = update.effective_user.id
+    row = cur.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()
+
+    if row and row["name"]:
+        text = f"Welcome back, {row['name']} 👋\n\nUse the menu below or open the map."
+    else:
+        text = "Welcome to Pulse Bangkok 👋\n\nOpen the map or use the menu below to check in."
+
+    if LIVE_MAP_URL:
+        await update.message.reply_text(
+            text,
+            reply_markup=summary_buttons(context.bot.username),
+        )
+
     await update.message.reply_text(
-        "Welcome to Pulse Bangkok\n\nSee what’s happening around you.",
+        "Use the menu below 👇",
         reply_markup=main_menu(),
     )
+
+
+async def open_map(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if LIVE_MAP_URL:
+        await update.message.reply_text(
+            f"Open the live map:\n{LIVE_MAP_URL}",
+            reply_markup=main_menu(),
+        )
+    else:
+        await update.message.reply_text(
+            "Map URL not configured.",
+            reply_markup=main_menu(),
+        )
 
 
 async def safety(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -741,6 +777,7 @@ async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     await update.message.reply_text("Check-in ended.", reply_markup=main_menu())
 
+
 # ================= GROUP ONBOARDING =================
 async def welcome_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type not in ("group", "supergroup"):
@@ -759,14 +796,15 @@ async def welcome_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE
     bot_username = context.bot.username
     text = (
         "Welcome to Pulse Bangkok 👋\n\n"
-        "This group shows what’s happening around the city in real time.\n"
-        "To appear in the next live update, check in with the bot 👇"
+        "This group shows what’s happening around the city in real time.\n\n"
+        "👇 Open the live map or check in below:"
     )
 
     await update.message.reply_text(
         text,
         reply_markup=summary_buttons(bot_username),
     )
+
 
 # ================= ADMIN =================
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -964,6 +1002,7 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     await update.message.reply_text(f"Chat title: {chat.title}\nChat ID: {chat.id}")
 
+
 # ================= SUMMARY JOB =================
 async def summary_job(context: ContextTypes.DEFAULT_TYPE):
     if not CHANNEL_ID:
@@ -982,6 +1021,7 @@ async def summary_job(context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         print(f"Summary send failed: {e}")
+
 
 # ================= MAIN =================
 def main():
@@ -1017,6 +1057,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^Safety rules$"), safety))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^My status$"), status))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^End check-in$"), end))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^🗺️ Open Map$"), open_map))
     app.add_handler(conv)
 
     if app.job_queue:
