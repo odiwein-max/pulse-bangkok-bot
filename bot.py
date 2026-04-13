@@ -512,12 +512,20 @@ def format_summary_text() -> str:
 # ================= API =================
 app_flask = Flask(__name__)
 
-@app_flask.route("/api/health")
+@app_flask.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
+@app_flask.route("/api/health", methods=["GET", "OPTIONS"])
 def api_health():
     return jsonify({"ok": True, "service": "pulse-bangkok-bot"})
 
 
-@app_flask.route("/api/heatmap")
+@app_flask.route("/api/heatmap", methods=["GET", "OPTIONS"])
 def api_heatmap():
     cleanup()
 
@@ -580,7 +588,6 @@ def api_heatmap():
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app_flask.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
 # ================= USER FLOW =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.effective_chat.type
