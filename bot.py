@@ -1071,7 +1071,7 @@ def main():
     app.add_handler(conv)
 
     if app.job_queue:
-        app.job_queue.run_repeating(summary_job, interval=SUMMARY_INTERVAL_MIN * 60, first=10)
+        app.job_queue.run_repeating(summary_job, interval=SUMMARY_INTERVAL_MIN * 720, first=10)
 
     app.run_polling()
 
